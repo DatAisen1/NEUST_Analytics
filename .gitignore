@@ -1,5 +1,27 @@
+# Virtual Environment
 capsvenv/
+venv/
+
+# Environment Variables
 .env
+
+# Logs
 logs/
+*.log
+
+# Python Cache
 __pycache__/
 *.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
