@@ -1,193 +1,202 @@
 # ==============================================================================
 # NEUST Academic Analytics and Forecasting System
-# database/models/gold_models.py
-# SQLAlchemy ORM models for the Gold (analytics-ready star schema) layer
+# database/models/silver_models.py
+# SQLAlchemy ORM models for the Silver (cleaned & standardized) schema
 # ==============================================================================
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, ForeignKey, Integer,
     Numeric, SmallInteger, Text, TIMESTAMP,
     CheckConstraint, Index, UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, relationship, declared_attr
 
 
 # ------------------------------------------------------------------------------
-# Base
+# Base — Silver uses its own declarative base
 # ------------------------------------------------------------------------------
 class Base(DeclarativeBase):
     pass
 
 
-class RefreshMixin:
-    """Tracks when a Gold row was last rebuilt from Silver."""
+class TransformMixin:
+    """Adds Bronze lineage tracking to all Silver tables."""
 
-    refreshed_at: Column = Column(
+    bronze_batch_id = Column(
+        UUID(as_uuid=True),
+        nullable=False,
+        comment="batch_id of the Bronze run this row was derived from",
+    )
+    transformed_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-        comment="UTC timestamp of the last Gold aggregation that wrote this row",
+        comment="UTC timestamp of the Silver transformation",
     )
 
 
 # ==============================================================================
-# DIMENSION TABLES
+# SILVER LOOKUP / DIMENSION TABLES
 # ==============================================================================
 
-class GoldDimTime(Base):
+class SilverAcademicPeriod(Base):
     """
-    Time dimension — one row per academic year + semester.
+    Standardized academic year + semester combinations.
 
-    sort_key = year_start * 10 + semester  (e.g. 2023*10+1 = 20231)
-    This allows ORDER BY sort_key to produce correct chronological order
-    without string parsing in every query.
+    Created during Bronze → Silver transformation when new periods are
+    encountered. Used as a FK in all Silver fact-like tables.
+
+    Semester values:
+        1 = 1st Semester
+        2 = 2nd Semester
+        3 = Summer
     """
 
-    __tablename__ = "dim_time"
+    __tablename__ = "academic_periods"
 
     @declared_attr
     def __table_args__(cls):
         return (
-            UniqueConstraint("academic_year", "semester", name="uq_gold_dim_time"),
-            Index("idx_gold_dim_time_sort", "sort_key"),
-            {"schema": "gold", "comment": "Time dimension — academic year and semester"},
+            UniqueConstraint("academic_year", "semester", name="uq_silver_ap"),
+            {"schema": "silver", "comment": "Canonical academic periods reference table"},
         )
 
-    time_id        = Column(Integer,     primary_key=True, autoincrement=True)
-    academic_year  = Column(Text,        nullable=False)
-    semester       = Column(SmallInteger, nullable=False)
-    year_start     = Column(SmallInteger, nullable=False)
-    year_end       = Column(SmallInteger, nullable=False)
-    semester_label = Column(Text,        nullable=False, comment="'1st Semester' | '2nd Semester' | 'Summer'")
-    full_label     = Column(Text,        nullable=False, comment="'AY 2023-2024 1st Semester'")
-    sort_key       = Column(Integer,     nullable=False, comment="year_start * 10 + semester — use for ORDER BY")
-    is_current     = Column(Boolean,     nullable=False, default=False)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    academic_year = Column(Text,     nullable=False, comment="e.g. '2023-2024'")
+    semester      = Column(SmallInteger, nullable=False, comment="1, 2, or 3 (summer)")
+    year_start    = Column(SmallInteger, nullable=False)
+    year_end      = Column(SmallInteger, nullable=False)
+    label         = Column(Text,     nullable=False, comment="e.g. 'AY 2023-2024 Sem 1'")
+    is_current    = Column(Boolean,  nullable=False, default=False)
+    created_at    = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
 
     # Relationships
-    fact_metrics        = relationship("GoldFactEnrollmentMetrics", back_populates="time")
-    agg_program_perf    = relationship("GoldAggProgramPerformance", back_populates="time")
-    agg_college_summary = relationship("GoldAggCollegeSummary",     back_populates="time")
+    enrollment_flows = relationship("SilverEnrollmentFlow", back_populates="period")
+    student_outcomes = relationship("SilverStudentOutcomes", back_populates="period")
 
     def __repr__(self) -> str:
-        return f"<GoldDimTime {self.full_label!r}>"
+        return f"<SilverAcademicPeriod {self.label!r}>"
 
 
-class GoldDimProgram(Base):
+class SilverProgram(Base):
     """
-    Program dimension — one row per canonical program code.
+    Canonical program reference table.
 
-    Populated from silver.programs during the Gold aggregation step.
-    Kept separate so Metabase can filter/group by college without
-    joining fact tables.
+    Bronze program names are standardized against this table during
+    Silver transformation (e.g. 'BS CS', 'BSCS', 'BS-CS' → 'BSCS').
     """
 
-    __tablename__ = "dim_program"
+    __tablename__ = "programs"
 
     @declared_attr
     def __table_args__(cls):
         return (
-            Index("idx_gold_dim_program_college", "college"),
-            {"schema": "gold", "comment": "Program dimension — canonical programs and colleges"},
+            UniqueConstraint("program_code", name="uq_silver_programs_program_code"),
+            Index("idx_silver_programs_college", "college"),
+            {
+                "schema": "silver",
+                "comment": "Canonical programs and colleges reference table",
+            },
         )
 
-    program_id     = Column(Integer,     primary_key=True, autoincrement=True)
-    program_code   = Column(Text,        nullable=False, unique=True)
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    program_code   = Column(Text,        nullable=False, unique=True, comment="Canonical code e.g. 'BSCS'")
     program_name   = Column(Text,        nullable=False)
     college        = Column(Text,        nullable=False)
     department     = Column(Text,        nullable=True)
     duration_years = Column(SmallInteger, nullable=False, default=4)
     is_active      = Column(Boolean,     nullable=False, default=True)
+    created_at     = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at     = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     # Relationships
-    fact_metrics     = relationship("GoldFactEnrollmentMetrics", back_populates="program")
-    agg_program_perf = relationship("GoldAggProgramPerformance", back_populates="program")
+    enrollment_flows = relationship("SilverEnrollmentFlow", back_populates="program")
+    student_outcomes = relationship("SilverStudentOutcomes", back_populates="program")
 
     def __repr__(self) -> str:
-        return f"<GoldDimProgram {self.program_code!r}>"
-
-
-class GoldDimYearLevel(Base):
-    """
-    Year level dimension with descriptive labels.
-
-    Pre-populated by the migration. Values 5 and 6 represent
-    super seniors and extended students — used in at-risk detection.
-    """
-
-    __tablename__ = "dim_year_level"
-
-    @declared_attr
-    def __table_args__(cls):
-        return (
-            {"schema": "gold", "comment": "Year level dimension with readable labels"},
-        )
-
-    year_level_id = Column(Integer,     primary_key=True, autoincrement=True)
-    year_level    = Column(SmallInteger, nullable=False, unique=True)
-    level_name    = Column(Text,        nullable=False, comment="'Freshman' | 'Sophomore' | etc.")
-    is_irregular  = Column(Boolean,     nullable=False, default=False)
-
-    # Relationship
-    fact_metrics = relationship("GoldFactEnrollmentMetrics", back_populates="year_level_dim")
-
-    def __repr__(self) -> str:
-        return f"<GoldDimYearLevel {self.year_level} — {self.level_name!r}>"
+        return f"<SilverProgram {self.program_code!r} — {self.college!r}>"
 
 
 # ==============================================================================
-# FACT TABLE
+# SILVER FACT-LIKE TABLES
 # ==============================================================================
 
-class GoldFactEnrollmentMetrics(RefreshMixin, Base):
+class SilverEnrollmentFlow(TransformMixin, Base):
     """
-    Central fact table — one row per (time, program, year_level, gender).
+    Cleaned and standardized enrollment intake records.
 
-    Joins both enrollment flow and student outcomes into a single row
-    so dashboards can compute any KPI with a single table scan.
-
-    Pre-computed KPI columns (dropout_rate, graduation_rate, etc.) are
-    populated during the Gold aggregation step to avoid repeated division
-    in every Metabase chart query.
-
-    Unique key: (time_id, program_id, year_level_id, gender)
-    Use INSERT ... ON CONFLICT DO UPDATE on pipeline refreshes.
+    Differences from Bronze:
+    - academic_year and semester are validated and type-cast
+    - program names are standardized to a canonical code
+    - null metrics are replaced with 0
+    - acceptance_rate is a generated/computed column (stored in DB)
+    - duplicates are removed via the unique constraint
     """
 
-    __tablename__ = "fact_enrollment_metrics"
+    __tablename__ = "enrollment_flow"
 
     @declared_attr
     def __table_args__(cls):
         return (
             UniqueConstraint(
-                "time_id", "program_id", "year_level_id", "gender",
-                name="uq_gold_fact",
+                "academic_year", "semester", "program_code",
+                "major", "year_level", "gender",
+                name="uq_silver_ef",
             ),
+            CheckConstraint("year_level BETWEEN 1 AND 6",   name="ck_silver_ef_year_level"),
+            CheckConstraint("applicants >= 0",               name="ck_silver_ef_applicants"),
+            CheckConstraint("accepted_applicants >= 0",      name="ck_silver_ef_accepted"),
+            CheckConstraint("total_enrolled >= 0",           name="ck_silver_ef_enrolled"),
+            CheckConstraint("new_students >= 0",             name="ck_silver_ef_new"),
+            CheckConstraint("transferees >= 0",              name="ck_silver_ef_transferees"),
+            CheckConstraint("returnees >= 0",                name="ck_silver_ef_returnees"),
             CheckConstraint(
-                "gender IN ('Male', 'Female', 'Other', 'Not Specified', 'All')",
-                name="ck_gold_fact_gender",
+                "gender IN ('Male', 'Female', 'Other', 'Not Specified')",
+                name="ck_silver_ef_gender",
             ),
-            Index("idx_gold_fact_time",         "time_id"),
-            Index("idx_gold_fact_program",       "program_id"),
-            Index("idx_gold_fact_year_level",    "year_level_id"),
-            Index("idx_gold_fact_time_program",  "time_id", "program_id"),
+            Index("idx_silver_ef_period",   "period_id"),
+            Index("idx_silver_ef_program",  "program_id"),
+            Index("idx_silver_ef_year_sem", "academic_year", "semester"),
+            Index("idx_silver_ef_college",  "college"),
             {
-                "schema": "gold",
-                "comment": "Central fact table — enrollment and outcome metrics",
+                "schema": "silver",
+                "comment": "Cleaned enrollment intake — Bronze→Silver output",
             },
         )
 
-    metric_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
 
-    # Dimension foreign keys
-    time_id       = Column(Integer, ForeignKey("gold.dim_time.time_id"),           nullable=False)
-    program_id    = Column(Integer, ForeignKey("gold.dim_program.program_id"),     nullable=False)
-    year_level_id = Column(Integer, ForeignKey("gold.dim_year_level.year_level_id"), nullable=False)
-    gender        = Column(Text,    nullable=True)
+    # Foreign keys
+    period_id  = Column(Integer, ForeignKey("silver.academic_periods.id"), nullable=False)
+    program_id = Column(Integer, ForeignKey("silver.programs.id"),         nullable=False)
 
-    # ── Enrollment metrics ──────────────────────────────────────────────────
+    # Standardized fields
+    academic_year  = Column(Text,        nullable=False)
+    semester       = Column(SmallInteger, nullable=False)
+    college        = Column(Text,        nullable=False)
+    program_code   = Column(Text,        nullable=False)
+    major          = Column(Text,        nullable=True)
+    year_level     = Column(SmallInteger, nullable=False)
+    gender         = Column(Text,        nullable=True)
+
+    # Enrollment metrics (0 when source is null)
     applicants          = Column(Integer, nullable=False, default=0)
     accepted_applicants = Column(Integer, nullable=False, default=0)
     total_enrolled      = Column(Integer, nullable=False, default=0)
@@ -195,181 +204,132 @@ class GoldFactEnrollmentMetrics(RefreshMixin, Base):
     transferees         = Column(Integer, nullable=False, default=0)
     returnees           = Column(Integer, nullable=False, default=0)
 
-    # ── Outcome metrics ─────────────────────────────────────────────────────
+    # Computed rate (Python-side; the DB generated column handles persistence)
+    acceptance_rate = Column(
+        Numeric(5, 2),
+        nullable=True,
+        comment="accepted_applicants / applicants * 100 — populated by transformation",
+    )
+
+    # Relationships
+    period  = relationship("SilverAcademicPeriod", back_populates="enrollment_flows")
+    program = relationship("SilverProgram",         back_populates="enrollment_flows")
+
+    def __repr__(self) -> str:
+        return (
+            f"<SilverEnrollmentFlow id={self.id} "
+            f"ay={self.academic_year!r} sem={self.semester} "
+            f"prog={self.program_code!r} yl={self.year_level}>"
+        )
+
+
+class SilverStudentOutcomes(TransformMixin, Base):
+    """
+    Cleaned and standardized student outcome records.
+
+    Deduplication key: (academic_year, semester, program_code, major, year_level, gender).
+    Shifter balance is computed during aggregation in Gold, not stored here.
+    """
+
+    __tablename__ = "student_outcomes"
+
+    @declared_attr
+    def __table_args__(cls):
+        return (
+            UniqueConstraint(
+                "academic_year", "semester", "program_code",
+                "major", "year_level", "gender",
+                name="uq_silver_so",
+            ),
+            CheckConstraint("year_level BETWEEN 1 AND 6", name="ck_silver_so_year_level"),
+            CheckConstraint("graduates >= 0",              name="ck_silver_so_graduates"),
+            CheckConstraint("dropouts >= 0",               name="ck_silver_so_dropouts"),
+            CheckConstraint("shifters_out >= 0",           name="ck_silver_so_shifters_out"),
+            CheckConstraint("shifters_in >= 0",            name="ck_silver_so_shifters_in"),
+            CheckConstraint(
+                "gender IN ('Male', 'Female', 'Other', 'Not Specified')",
+                name="ck_silver_so_gender",
+            ),
+            Index("idx_silver_so_period",   "period_id"),
+            Index("idx_silver_so_program",  "program_id"),
+            Index("idx_silver_so_year_sem", "academic_year", "semester"),
+            {
+                "schema": "silver",
+                "comment": "Cleaned student outcomes — Bronze→Silver output",
+            },
+        )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+
+    # Foreign keys
+    period_id  = Column(Integer, ForeignKey("silver.academic_periods.id"), nullable=False)
+    program_id = Column(Integer, ForeignKey("silver.programs.id"),         nullable=False)
+
+    # Standardized fields
+    academic_year = Column(Text,        nullable=False)
+    semester      = Column(SmallInteger, nullable=False)
+    college       = Column(Text,        nullable=False)
+    program_code  = Column(Text,        nullable=False)
+    major         = Column(Text,        nullable=True)
+    year_level    = Column(SmallInteger, nullable=False)
+    gender        = Column(Text,        nullable=True)
+
+    # Outcome metrics
     graduates    = Column(Integer, nullable=False, default=0)
     dropouts     = Column(Integer, nullable=False, default=0)
     shifters_out = Column(Integer, nullable=False, default=0)
     shifters_in  = Column(Integer, nullable=False, default=0)
 
-    # ── Pre-computed KPI rates ───────────────────────────────────────────────
-    acceptance_rate     = Column(Numeric(5, 2), nullable=True,
-                                 comment="accepted_applicants / applicants * 100")
-    dropout_rate        = Column(Numeric(5, 2), nullable=True,
-                                 comment="dropouts / total_enrolled * 100")
-    graduation_rate     = Column(Numeric(5, 2), nullable=True,
-                                 comment="graduates / total_enrolled * 100")
-    retention_rate      = Column(Numeric(5, 2), nullable=True,
-                                 comment="(total_enrolled - dropouts) / total_enrolled * 100")
-    net_shifter_balance = Column(Integer, nullable=True,
-                                 comment="shifters_in - shifters_out")
-
     # Relationships
-    time          = relationship("GoldDimTime",      back_populates="fact_metrics")
-    program       = relationship("GoldDimProgram",   back_populates="fact_metrics")
-    year_level_dim = relationship("GoldDimYearLevel", back_populates="fact_metrics")
+    period  = relationship("SilverAcademicPeriod", back_populates="student_outcomes")
+    program = relationship("SilverProgram",         back_populates="student_outcomes")
 
     def __repr__(self) -> str:
         return (
-            f"<GoldFactEnrollmentMetrics metric_id={self.metric_id} "
-            f"time_id={self.time_id} prog_id={self.program_id} "
-            f"yl_id={self.year_level_id} gender={self.gender!r}>"
+            f"<SilverStudentOutcomes id={self.id} "
+            f"ay={self.academic_year!r} sem={self.semester} "
+            f"prog={self.program_code!r} yl={self.year_level}>"
         )
 
 
-# ==============================================================================
-# AGGREGATE TABLES
-# ==============================================================================
-
-class GoldAggProgramPerformance(RefreshMixin, Base):
+class SilverTransformationLog(Base):
     """
-    Pre-aggregated program-level KPIs per semester.
+    Audit log for Bronze → Silver transformation runs.
 
-    Rebuilt from fact_enrollment_metrics on every pipeline run.
-    Powers the program comparison dashboard in Metabase.
-
-    enrollment_change_pct and dropout_change_pct are computed by
-    comparing the current semester against the immediately preceding one.
+    One row per (bronze_batch_id, target_table). Used to detect
+    whether a batch has already been transformed and to diagnose failures.
     """
 
-    __tablename__ = "agg_program_performance"
-
-    @declared_attr
-    def __table_args__(cls):
-        return (
-            UniqueConstraint("program_id", "time_id", name="uq_gold_agg_prog"),
-            Index("idx_gold_agg_prog_time",    "time_id"),
-            Index("idx_gold_agg_prog_program", "program_id"),
-            {
-                "schema": "gold",
-                "comment": "Program KPI rollup per semester — feeds program comparison charts",
-            },
-        )
-
-    agg_id     = Column(BigInteger, primary_key=True, autoincrement=True)
-    program_id = Column(Integer, ForeignKey("gold.dim_program.program_id"), nullable=False)
-    time_id    = Column(Integer, ForeignKey("gold.dim_time.time_id"),       nullable=False)
-
-    # Totals
-    total_applicants  = Column(Integer, nullable=False, default=0)
-    total_accepted    = Column(Integer, nullable=False, default=0)
-    total_enrolled    = Column(Integer, nullable=False, default=0)
-    total_graduates   = Column(Integer, nullable=False, default=0)
-    total_dropouts    = Column(Integer, nullable=False, default=0)
-    total_shifters_out = Column(Integer, nullable=False, default=0)
-    total_shifters_in  = Column(Integer, nullable=False, default=0)
-
-    # KPIs
-    avg_acceptance_rate = Column(Numeric(5, 2), nullable=True)
-    avg_graduation_rate = Column(Numeric(5, 2), nullable=True)
-    avg_dropout_rate    = Column(Numeric(5, 2), nullable=True)
-    avg_retention_rate  = Column(Numeric(5, 2), nullable=True)
-
-    # Trend vs previous semester
-    enrollment_change_pct = Column(Numeric(6, 2), nullable=True,
-                                   comment="% change in total_enrolled vs prior semester")
-    dropout_change_pct    = Column(Numeric(6, 2), nullable=True,
-                                   comment="% change in total_dropouts vs prior semester")
-
-    # Relationships
-    program = relationship("GoldDimProgram", back_populates="agg_program_perf")
-    time    = relationship("GoldDimTime",    back_populates="agg_program_perf")
-
-    def __repr__(self) -> str:
-        return (
-            f"<GoldAggProgramPerformance prog_id={self.program_id} "
-            f"time_id={self.time_id} enrolled={self.total_enrolled}>"
-        )
-
-
-class GoldAggCollegeSummary(RefreshMixin, Base):
-    """
-    College-level rollup — one row per college per semester.
-
-    The highest-level aggregation in the Gold layer. Used for the
-    institution-wide summary dashboard and executive reports.
-    """
-
-    __tablename__ = "agg_college_summary"
-
-    @declared_attr
-    def __table_args__(cls):
-        return (
-            UniqueConstraint("college", "time_id", name="uq_gold_agg_college"),
-            Index("idx_gold_agg_college_time", "time_id"),
-            {
-                "schema": "gold",
-                "comment": "College-level enrollment and outcome rollup per semester",
-            },
-        )
-
-    agg_id          = Column(BigInteger, primary_key=True, autoincrement=True)
-    college         = Column(Text,    nullable=False)
-    time_id         = Column(Integer, ForeignKey("gold.dim_time.time_id"), nullable=False)
-
-    total_enrolled      = Column(Integer,     nullable=False, default=0)
-    total_graduates     = Column(Integer,     nullable=False, default=0)
-    total_dropouts      = Column(Integer,     nullable=False, default=0)
-    program_count       = Column(Integer,     nullable=False, default=0)
-    avg_dropout_rate    = Column(Numeric(5,2), nullable=True)
-    avg_graduation_rate = Column(Numeric(5,2), nullable=True)
-
-    # Relationship
-    time = relationship("GoldDimTime", back_populates="agg_college_summary")
-
-    def __repr__(self) -> str:
-        return (
-            f"<GoldAggCollegeSummary college={self.college!r} "
-            f"time_id={self.time_id} enrolled={self.total_enrolled}>"
-        )
-
-
-class GoldPipelineRunLog(Base):
-    """
-    Top-level audit log for every pipeline.py execution.
-
-    One row per run. Captures row counts at each layer and the final
-    status. Used for monitoring and debugging pipeline failures.
-    """
-
-    __tablename__ = "pipeline_run_log"
+    __tablename__ = "transformation_log"
 
     @declared_attr
     def __table_args__(cls):
         return (
             CheckConstraint(
-                "status IN ('running', 'success', 'failed', 'partial')",
-                name="ck_gold_run_status",
+                "status IN ('pending', 'success', 'failed', 'partial')",
+                name="ck_silver_log_status",
             ),
-            {"schema": "gold", "comment": "Top-level audit log for every pipeline.py run"},
+            {"schema": "silver", "comment": "Audit log for Silver transformation runs"},
         )
 
-    run_id        = Column(BigInteger, primary_key=True, autoincrement=True)
-    run_label     = Column(Text,    nullable=True,  comment="Optional label e.g. 'SEM1_2024_manual'")
-    started_at    = Column(
+    id               = Column(BigInteger, primary_key=True, autoincrement=True)
+    bronze_batch_id  = Column(UUID(as_uuid=True), nullable=False)
+    target_table     = Column(Text,    nullable=False)
+    rows_processed   = Column(Integer, nullable=False, default=0)
+    rows_inserted    = Column(Integer, nullable=False, default=0)
+    rows_updated     = Column(Integer, nullable=False, default=0)
+    rows_skipped     = Column(Integer, nullable=False, default=0)
+    status           = Column(Text,    nullable=False, default="pending")
+    error_message    = Column(Text,    nullable=True)
+    started_at       = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    completed_at  = Column(TIMESTAMP(timezone=True), nullable=True)
-    status        = Column(Text,    nullable=False, default="running")
-    bronze_rows   = Column(Integer, nullable=True,  comment="Total rows in Bronze after this run")
-    silver_rows   = Column(Integer, nullable=True,  comment="Total rows in Silver after this run")
-    gold_rows     = Column(Integer, nullable=True,  comment="Total rows in Gold after this run")
-    error_message = Column(Text,    nullable=True)
-    triggered_by  = Column(Text,    nullable=False, default="manual")
+    completed_at     = Column(TIMESTAMP(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return (
-            f"<GoldPipelineRunLog run_id={self.run_id} "
-            f"status={self.status!r} label={self.run_label!r}>"
+            f"<SilverTransformationLog id={self.id} "
+            f"table={self.target_table!r} status={self.status!r}>"
         )

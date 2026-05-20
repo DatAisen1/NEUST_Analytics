@@ -85,6 +85,7 @@ class BronzeLoader:
         self.file_path  = Path(file_path)
         self.batch_id   = uuid4()
         self._started   = time.monotonic()
+        self._skip_audit_log = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -106,15 +107,18 @@ class BronzeLoader:
 
             # Step 2 — idempotency check
             logger.info("Step 2/5 — Checking for duplicate ingestion ...")
-            if self._already_ingested():
+            existing_batch_id = self._already_ingested()
+            if existing_batch_id is not None:
                 logger.warning(
                     "File '{}' has already been ingested. "
                     "Skipping to prevent duplicate data. "
                     "Rename the file or delete the Bronze record to re-ingest.",
                     self.file_path.name,
                 )
+                result.batch_id = existing_batch_id
                 result.status = "success"
                 result.elapsed_seconds = time.monotonic() - self._started
+                self._skip_audit_log = True
                 return result
 
             # Step 3 — read sheets
@@ -153,7 +157,8 @@ class BronzeLoader:
 
         finally:
             result.elapsed_seconds = time.monotonic() - self._started
-            self._write_ingestion_log(result)
+            if not self._skip_audit_log:
+                self._write_ingestion_log(result)
 
         if result.status in ("success", "partial"):
             log_step_success(
@@ -175,26 +180,28 @@ class BronzeLoader:
     # Idempotency check
     # ------------------------------------------------------------------
 
-    def _already_ingested(self) -> bool:
+    def _already_ingested(self) -> UUID | None:
         """
         Check if this filename has already been successfully ingested.
 
-        Uses the source_file + status check in bronze.ingestion_log.
-        A 'failed' previous attempt is allowed to retry.
+        Returns the original batch_id when the file has already been loaded,
+        otherwise returns None.
         """
         with get_session() as session:
             result = session.execute(
                 text(
                     """
-                    SELECT COUNT(*) FROM bronze.ingestion_log
+                    SELECT batch_id FROM bronze.ingestion_log
                     WHERE source_file = :fname
                       AND status IN ('success', 'partial')
+                    ORDER BY completed_at DESC
+                    LIMIT 1
                     """
                 ),
                 {"fname": self.file_path.name},
             )
-            count = result.scalar()
-        return count > 0
+            row = result.fetchone()
+        return row[0] if row else None
 
     # ------------------------------------------------------------------
     # Sheet reading

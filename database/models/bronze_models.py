@@ -25,7 +25,7 @@ class Base(DeclarativeBase):
 class TimestampMixin:
     """Adds ingested_at auto-timestamp to Bronze tables."""
 
-    ingested_at: Column = Column(
+    ingested_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -36,13 +36,13 @@ class TimestampMixin:
 class SoftDeleteMixin:
     """Adds soft-delete support — rows are never physically removed."""
 
-    is_deleted: Column = Column(
+    is_deleted = Column(
         Boolean,
         nullable=False,
         default=False,
         comment="Logical delete flag — never hard-delete Bronze records",
     )
-    deleted_at: Column = Column(
+    deleted_at = Column(
         TIMESTAMP(timezone=True),
         nullable=True,
         comment="UTC timestamp when this row was soft-deleted",

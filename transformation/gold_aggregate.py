@@ -224,7 +224,7 @@ class GoldAggregator:
                     is_active=is_active,
                 )
                 stmt = stmt.on_conflict_do_update(
-                    constraint="uq_gold_dim_program_program_code",
+                    constraint="dim_program_program_code_key",
                     set_={
                         "program_name":   stmt.excluded.program_name,
                         "college":        stmt.excluded.college,
