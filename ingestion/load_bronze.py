@@ -2,6 +2,13 @@
 # NEUST Academic Analytics and Forecasting System
 # ingestion/load_bronze.py
 # Reads Excel source files and loads raw data into Bronze PostgreSQL tables
+#
+# FIXES APPLIED:
+#   Fix 1 — force parameter bypasses idempotency check entirely
+#   Fix 2 — _already_ingested() respects force flag
+#   Fix 3 — skipped status is distinct from success (zero rows loaded ≠ success)
+#   Fix 6 — batch_id on skipped runs returns None so Silver can detect it
+#   Fix 8 — reprocess mode clears ingestion log entry before re-ingesting
 # ==============================================================================
 
 from __future__ import annotations
@@ -23,7 +30,13 @@ from database.models.bronze_models import (
 )
 from ingestion.schema_validator import validate_file
 from utils.config import get_config
-from utils.logger import log_step_failure, log_step_start, log_step_success, logger
+from utils.logger import (
+    log_stage_failure,
+    log_stage_start,
+    log_stage_success,
+    log_warning,
+    logger,
+)
 
 _config = get_config()
 
@@ -34,17 +47,26 @@ _config = get_config()
 
 @dataclass
 class IngestionResult:
-    """Summary of a single ingestion run."""
+    """
+    Summary of a single ingestion run.
 
-    batch_id:        UUID
-    source_file:     str
-    ef_rows_loaded:  int = 0
-    so_rows_loaded:  int = 0
-    ef_rows_rejected: int = 0
-    so_rows_rejected: int = 0
-    status:          str = "pending"   # pending | success | failed | partial
-    error_message:   str | None = None
-    elapsed_seconds: float = 0.0
+    status values:
+        success   — rows were loaded successfully
+        partial   — some rows loaded, some rejected
+        skipped   — file already ingested, no force flag (FIX 3)
+        failed    — error during ingestion, no rows loaded
+    """
+
+    batch_id:         UUID | None       # FIX 6: None when skipped
+    source_file:      str
+    ef_rows_loaded:   int  = 0
+    so_rows_loaded:   int  = 0
+    ef_rows_rejected: int  = 0
+    so_rows_rejected: int  = 0
+    status:           str  = "pending"
+    error_message:    str | None = None
+    elapsed_seconds:  float = 0.0
+    was_skipped:      bool = False      # FIX 3: explicit skipped flag
 
     @property
     def total_rows_loaded(self) -> int:
@@ -53,6 +75,11 @@ class IngestionResult:
     @property
     def total_rows_rejected(self) -> int:
         return self.ef_rows_rejected + self.so_rows_rejected
+
+    @property
+    def has_data(self) -> bool:
+        """FIX 3: True only when rows were actually loaded — not just 'no crash'."""
+        return self.total_rows_loaded > 0
 
 
 # ==============================================================================
@@ -63,29 +90,24 @@ class BronzeLoader:
     """
     Loads raw NEUST enrollment Excel data into the Bronze PostgreSQL schema.
 
-    Pipeline:
-        1. Validate the file schema (columns, types, required fields)
-        2. Check the file has not already been ingested (idempotency)
-        3. Read both sheets into DataFrames
-        4. Clean column names and strip whitespace
-        5. Batch-insert rows into bronze.enrollment_flow
-        6. Batch-insert rows into bronze.student_outcomes
-        7. Write an audit record to bronze.ingestion_log
-
-    All columns are stored as-is (no transformation). The Bronze layer
-    is append-only — existing rows are never modified or deleted.
-
-    Usage:
-        loader = BronzeLoader("data/raw/enrollment_AY2024.xlsx")
-        result = loader.run()
-        print(result.total_rows_loaded)
+    Parameters:
+        file_path   — path to the Excel file to ingest
+        force       — FIX 1: if True, bypasses idempotency check entirely
+        reprocess   — FIX 8: if True, clears the previous ingestion log
+                      entry for this file before re-ingesting
     """
 
-    def __init__(self, file_path: str | Path) -> None:
+    def __init__(
+        self,
+        file_path:  str | Path,
+        force:      bool = False,   # FIX 1
+        reprocess:  bool = False,   # FIX 8
+    ) -> None:
         self.file_path  = Path(file_path)
+        self.force      = force
+        self.reprocess  = reprocess
         self.batch_id   = uuid4()
         self._started   = time.monotonic()
-        self._skip_audit_log = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -98,27 +120,39 @@ class BronzeLoader:
             source_file=self.file_path.name,
         )
 
-        log_step_start(1, f"Bronze ingestion — {self.file_path.name}")
+        log_stage_start("BRONZE", 1, f"Bronze ingestion — {self.file_path.name}")
+
+        # FIX 1 + FIX 8 — log active mode clearly
+        if self.force:
+            log_warning(
+                "FORCE mode ON — idempotency check bypassed.",
+                stage="BRONZE",
+            )
+        if self.reprocess:
+            log_warning(
+                "REPROCESS mode ON — clearing previous ingestion log.",
+                stage="BRONZE",
+            )
+            self._clear_ingestion_log()
 
         try:
             # Step 1 — validate schema
             logger.info("Step 1/5 — Validating file schema ...")
             validate_file(self.file_path)
 
-            # Step 2 — idempotency check
+            # Step 2 — idempotency check (FIX 1: skipped when force=True)
             logger.info("Step 2/5 — Checking for duplicate ingestion ...")
-            existing_batch_id = self._already_ingested()
-            if existing_batch_id is not None:
+            if not self.force and self._already_ingested():
                 logger.warning(
-                    "File '{}' has already been ingested. "
-                    "Skipping to prevent duplicate data. "
-                    "Rename the file or delete the Bronze record to re-ingest.",
+                    "File '{}' has already been ingested. Skipping. "
+                    "Use --force to re-ingest or --reprocess to clear and re-run.",
                     self.file_path.name,
                 )
-                result.batch_id = existing_batch_id
-                result.status = "success"
+                # FIX 3: use 'skipped' status — not 'success'
+                result.status      = "skipped"
+                result.was_skipped = True
+                result.batch_id    = None   # FIX 6: signal to Silver that no new batch exists
                 result.elapsed_seconds = time.monotonic() - self._started
-                self._skip_audit_log = True
                 return result
 
             # Step 3 — read sheets
@@ -137,86 +171,112 @@ class BronzeLoader:
             result.so_rows_loaded   = so_loaded
             result.so_rows_rejected = so_rejected
 
-            # Determine final status
-            if result.total_rows_rejected == 0:
+            # FIX 3: status reflects actual data loaded
+            if result.total_rows_loaded == 0:
+                result.status = "failed"
+                result.error_message = (
+                    "Zero rows were loaded despite successful file read. "
+                    "Check that the Excel file contains data rows."
+                )
+            elif result.total_rows_rejected == 0:
                 result.status = "success"
             else:
                 result.status = "partial"
 
         except ValueError as exc:
-            # Validation failure — do not write any rows
             result.status = "failed"
             result.error_message = str(exc)
-            log_step_failure(1, "Bronze ingestion", exc)
+            log_stage_failure("BRONZE", 1, "Bronze ingestion", exc)
 
         except Exception as exc:
             result.status = "failed"
             result.error_message = str(exc)
             logger.exception("Unexpected error during Bronze ingestion: {}", exc)
-            log_step_failure(1, "Bronze ingestion", exc)
+            log_stage_failure("BRONZE", 1, "Bronze ingestion", exc)
 
         finally:
             result.elapsed_seconds = time.monotonic() - self._started
-            if not self._skip_audit_log:
+            # Do not write log for skipped runs — log already exists
+            if not result.was_skipped:
                 self._write_ingestion_log(result)
 
         if result.status in ("success", "partial"):
-            log_step_success(
-                1,
-                "Bronze ingestion",
-                rows=result.total_rows_loaded,
-            )
+            log_stage_success("BRONZE", 1, "Bronze ingestion", rows=result.total_rows_loaded)
             logger.info(
-                "Ingestion complete — batch_id={} | loaded={} | rejected={} | {:.2f}s",
-                result.batch_id,
-                result.total_rows_loaded,
-                result.total_rows_rejected,
-                result.elapsed_seconds,
+                f"[BRONZE] Ingestion complete — batch_id={result.batch_id} | "
+                f"loaded={result.total_rows_loaded} | rejected={result.total_rows_rejected} | "
+                f"{result.elapsed_seconds:.2f}s"
+            )
+        elif result.status == "failed":
+            logger.error(
+                f"[BRONZE] Ingestion FAILED — {self.file_path.name} | {result.error_message}"
             )
 
         return result
 
     # ------------------------------------------------------------------
-    # Idempotency check
+    # FIX 2 — idempotency check (unchanged logic, force handled upstream)
     # ------------------------------------------------------------------
 
-    def _already_ingested(self) -> UUID | None:
+    def _already_ingested(self) -> bool:
         """
         Check if this filename has already been successfully ingested.
-
-        Returns the original batch_id when the file has already been loaded,
-        otherwise returns None.
+        Only called when force=False.
         """
         with get_session() as session:
-            result = session.execute(
+            count = session.execute(
                 text(
                     """
-                    SELECT batch_id FROM bronze.ingestion_log
+                    SELECT COUNT(*) FROM bronze.ingestion_log
                     WHERE source_file = :fname
                       AND status IN ('success', 'partial')
-                    ORDER BY completed_at DESC
-                    LIMIT 1
                     """
                 ),
                 {"fname": self.file_path.name},
+            ).scalar()
+        return count > 0
+
+    # ------------------------------------------------------------------
+    # FIX 8 — reprocess: clear previous log entry for this file
+    # ------------------------------------------------------------------
+
+    def _clear_ingestion_log(self) -> None:
+        """
+        Delete ingestion log entries for this filename so the file
+        can be re-ingested cleanly without touching actual data tables.
+
+        This is safer than manually deleting Bronze table rows.
+        The existing Bronze rows remain — new rows get a fresh batch_id.
+        """
+        try:
+            with get_session() as session:
+                deleted = session.execute(
+                    text(
+                        """
+                        DELETE FROM bronze.ingestion_log
+                        WHERE source_file = :fname
+                        RETURNING id
+                        """
+                    ),
+                    {"fname": self.file_path.name},
+                ).rowcount
+            logger.info(
+                "Reprocess: cleared {} ingestion log entries for '{}'.",
+                deleted, self.file_path.name,
             )
-            row = result.fetchone()
-        return row[0] if row else None
+        except Exception as exc:
+            logger.error("Failed to clear ingestion log for reprocess: {}", exc)
 
     # ------------------------------------------------------------------
     # Sheet reading
     # ------------------------------------------------------------------
 
     def _read_sheets(self) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Read both Excel sheets and clean column names."""
-        xl = pd.ExcelFile(self.file_path, engine="openpyxl")
-
+        xl    = pd.ExcelFile(self.file_path, engine="openpyxl")
         ef_df = xl.parse("Enrollment_Flow",  dtype=str)
         so_df = xl.parse("Student_Outcomes", dtype=str)
-
         ef_df = self._clean_dataframe(ef_df)
         so_df = self._clean_dataframe(so_df)
-
         logger.debug(
             "Sheets loaded — Enrollment_Flow: {} rows | Student_Outcomes: {} rows",
             len(ef_df), len(so_df),
@@ -224,10 +284,8 @@ class BronzeLoader:
         return ef_df, so_df
 
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Strip whitespace from column names and string values. Drop fully empty rows."""
         df.columns = df.columns.str.strip()
         df = df.dropna(how="all").reset_index(drop=True)
-        # Strip leading/trailing whitespace from all string cells
         for col in df.select_dtypes(include="object").columns:
             df[col] = df[col].str.strip()
         return df
@@ -236,22 +294,13 @@ class BronzeLoader:
     # Enrollment flow loader
     # ------------------------------------------------------------------
 
-    def _load_enrollment_flow(
-        self, df: pd.DataFrame
-    ) -> tuple[int, int]:
-        """
-        Insert Enrollment_Flow rows into bronze.enrollment_flow.
-
-        Returns (rows_inserted, rows_rejected).
-        Uses batch inserts of size config.batch_size for performance.
-        """
-        rows_inserted = 0
+    def _load_enrollment_flow(self, df: pd.DataFrame) -> tuple[int, int]:
         rows_rejected = 0
         records       = []
 
         for idx, row in df.iterrows():
             try:
-                record = BronzeEnrollmentFlow(
+                records.append(BronzeEnrollmentFlow(
                     source_file         = self.file_path.name,
                     batch_id            = self.batch_id,
                     academic_year       = self._safe_str(row.get("Academic Year")),
@@ -267,35 +316,26 @@ class BronzeLoader:
                     new_students        = self._safe_int(row.get("New Students")),
                     transferees         = self._safe_int(row.get("Transferees")),
                     returnees           = self._safe_int(row.get("Returnees")),
-                )
-                records.append(record)
+                ))
             except Exception as exc:
                 rows_rejected += 1
                 logger.warning("Row {} rejected from Enrollment_Flow: {}", idx, exc)
 
-        rows_inserted = self._batch_insert(records, "bronze.enrollment_flow")
+        rows_inserted  = self._batch_insert(records, "bronze.enrollment_flow")
         rows_rejected += len(records) - rows_inserted
-
         return rows_inserted, rows_rejected
 
     # ------------------------------------------------------------------
     # Student outcomes loader
     # ------------------------------------------------------------------
 
-    def _load_student_outcomes(
-        self, df: pd.DataFrame
-    ) -> tuple[int, int]:
-        """
-        Insert Student_Outcomes rows into bronze.student_outcomes.
-
-        Returns (rows_inserted, rows_rejected).
-        """
+    def _load_student_outcomes(self, df: pd.DataFrame) -> tuple[int, int]:
         rows_rejected = 0
         records       = []
 
         for idx, row in df.iterrows():
             try:
-                record = BronzeStudentOutcomes(
+                records.append(BronzeStudentOutcomes(
                     source_file        = self.file_path.name,
                     batch_id           = self.batch_id,
                     academic_year      = self._safe_str(row.get("Academic Year")),
@@ -309,30 +349,20 @@ class BronzeLoader:
                     dropouts           = self._safe_int(row.get("Dropouts")),
                     shifters_out       = self._safe_int(row.get("Shifters Out")),
                     shifters_in        = self._safe_int(row.get("Shifters In")),
-                )
-                records.append(record)
+                ))
             except Exception as exc:
                 rows_rejected += 1
                 logger.warning("Row {} rejected from Student_Outcomes: {}", idx, exc)
 
-        rows_inserted = self._batch_insert(records, "bronze.student_outcomes")
+        rows_inserted  = self._batch_insert(records, "bronze.student_outcomes")
         rows_rejected += len(records) - rows_inserted
-
         return rows_inserted, rows_rejected
 
     # ------------------------------------------------------------------
-    # Batch insert (performance-critical)
+    # Batch insert
     # ------------------------------------------------------------------
 
     def _batch_insert(self, records: list, table_label: str) -> int:
-        """
-        Insert records in batches of config.batch_size.
-
-        Each batch is a single transaction. If a batch fails, it is
-        retried row-by-row so one bad row doesn't discard the entire batch.
-
-        Returns the number of rows successfully inserted.
-        """
         if not records:
             return 0
 
@@ -341,10 +371,7 @@ class BronzeLoader:
         rows_inserted = 0
 
         for batch_num in range(total_batches):
-            start  = batch_num * batch_size
-            end    = start + batch_size
-            batch  = records[start:end]
-
+            batch = records[batch_num * batch_size : (batch_num + 1) * batch_size]
             try:
                 with get_session() as session:
                     session.bulk_save_objects(batch)
@@ -354,7 +381,6 @@ class BronzeLoader:
                     batch_num + 1, total_batches, len(batch), table_label,
                 )
             except Exception as exc:
-                # Batch failed — retry row by row
                 logger.warning(
                     "Batch {}/{} failed for {} — retrying row by row. Error: {}",
                     batch_num + 1, total_batches, table_label, exc,
@@ -364,7 +390,6 @@ class BronzeLoader:
         return rows_inserted
 
     def _row_by_row_insert(self, records: list, table_label: str) -> int:
-        """Fallback: insert records one at a time. Used when a batch fails."""
         inserted = 0
         for record in records:
             try:
@@ -372,10 +397,7 @@ class BronzeLoader:
                     session.add(record)
                 inserted += 1
             except Exception as exc:
-                logger.error(
-                    "Row insert failed for {} — skipping. Error: {}",
-                    table_label, exc,
-                )
+                logger.error("Row insert failed for {} — skipping. Error: {}", table_label, exc)
         return inserted
 
     # ------------------------------------------------------------------
@@ -383,7 +405,6 @@ class BronzeLoader:
     # ------------------------------------------------------------------
 
     def _write_ingestion_log(self, result: IngestionResult) -> None:
-        """Write two audit records to bronze.ingestion_log (one per table)."""
         completed = datetime.now(timezone.utc)
         logs = [
             BronzeIngestionLog(
@@ -412,7 +433,6 @@ class BronzeLoader:
                 session.bulk_save_objects(logs)
             logger.debug("Ingestion audit log written — batch_id={}", result.batch_id)
         except Exception as exc:
-            # Never let a log write failure crash the pipeline
             logger.error("Failed to write ingestion log: {}", exc)
 
     # ------------------------------------------------------------------
@@ -421,7 +441,6 @@ class BronzeLoader:
 
     @staticmethod
     def _safe_str(value) -> str | None:
-        """Convert to string or None if blank/null."""
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return None
         s = str(value).strip()
@@ -429,7 +448,6 @@ class BronzeLoader:
 
     @staticmethod
     def _safe_int(value) -> int | None:
-        """Convert to int or None if blank/null/non-numeric."""
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return None
         try:
@@ -442,34 +460,35 @@ class BronzeLoader:
 # Module-level runner — called by pipeline.py
 # ==============================================================================
 
-def run_bronze(file_path: str | Path | None = None) -> IngestionResult:
+def run_bronze(
+    file_path:  str | Path | None = None,
+    force:      bool = False,   # FIX 1
+    reprocess:  bool = False,   # FIX 8
+) -> IngestionResult:
     """
     Entry point called by pipeline.py.
 
-    If file_path is not provided, scans config.raw_data_path for
-    all .xlsx files and ingests each one that has not yet been loaded.
-
-    Usage in pipeline.py:
-        from ingestion.load_bronze import run_bronze
-        result = run_bronze()
+    Args:
+        file_path  — specific Excel file to ingest (default: all in data/raw/)
+        force      — bypass idempotency check, always re-ingest
+        reprocess  — clear previous log entry then re-ingest (safer than force)
     """
     if file_path:
-        loader = BronzeLoader(file_path)
+        loader = BronzeLoader(file_path, force=force, reprocess=reprocess)
         return loader.run()
 
-    # Auto-discover all Excel files in the raw data folder
-    raw_path = _config.raw_data_path
+    raw_path   = _config.raw_data_path
     xlsx_files = sorted(raw_path.glob("*.xlsx"))
 
     if not xlsx_files:
         logger.warning("No .xlsx files found in: {}", raw_path)
-        return IngestionResult(batch_id=uuid4(), source_file="none", status="success")
+        return IngestionResult(batch_id=None, source_file="none", status="skipped", was_skipped=True)
 
     logger.info("Found {} Excel file(s) in {}", len(xlsx_files), raw_path)
 
     last_result = None
     for xlsx_file in xlsx_files:
-        loader = BronzeLoader(xlsx_file)
+        loader      = BronzeLoader(xlsx_file, force=force, reprocess=reprocess)
         last_result = loader.run()
 
     return last_result

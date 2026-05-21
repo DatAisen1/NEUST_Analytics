@@ -183,7 +183,7 @@ COMMENT ON TABLE silver.academic_periods IS 'Standardized academic year and seme
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS silver.programs (
     id                  SERIAL          PRIMARY KEY,
-    program_code        TEXT            NOT NULL UNIQUE,  -- canonical code e.g. 'BSCS'
+    program_code        TEXT            NOT NULL,         -- canonical code e.g. 'BSCS'
     program_name        TEXT            NOT NULL,
     college             TEXT            NOT NULL,
     department          TEXT,
@@ -194,6 +194,9 @@ CREATE TABLE IF NOT EXISTS silver.programs (
 );
 
 COMMENT ON TABLE silver.programs IS 'Canonical program and college reference table';
+
+ALTER TABLE silver.programs
+    ADD CONSTRAINT uq_silver_programs_program_code UNIQUE (program_code);
 
 CREATE INDEX IF NOT EXISTS idx_silver_programs_college
     ON silver.programs (college);
@@ -355,7 +358,7 @@ CREATE INDEX IF NOT EXISTS idx_gold_dim_time_sort
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS gold.dim_program (
     program_id          SERIAL          PRIMARY KEY,
-    program_code        TEXT            NOT NULL UNIQUE,
+    program_code        TEXT            NOT NULL,
     program_name        TEXT            NOT NULL,
     college             TEXT            NOT NULL,
     department          TEXT,
@@ -364,6 +367,9 @@ CREATE TABLE IF NOT EXISTS gold.dim_program (
 );
 
 COMMENT ON TABLE gold.dim_program IS 'Program dimension — canonical list of programs and colleges';
+
+ALTER TABLE gold.dim_program
+    ADD CONSTRAINT uq_gold_dim_program_program_code UNIQUE (program_code);
 
 CREATE INDEX IF NOT EXISTS idx_gold_dim_program_college
     ON gold.dim_program (college);

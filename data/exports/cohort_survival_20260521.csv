@@ -1,0 +1,58 @@
+program_code,program_name,college,cohort_year,initial_enrolled,semester_number,academic_year,semester,enrolled,dropouts,graduates,survival_rate,cumulative_dropout,is_at_risk
+BSARCHITEC,Bachelor of Science in Architecture,College Of Architecture,2023-2024,120,1,2023-2024,1,120,45,140,100.0,45,False
+BSARCHITEC,Bachelor of Science in Architecture,College Of Architecture,2023-2024,120,2,2023-2024,2,239,66,318,199.17,111,False
+BSARCHITEC,Bachelor of Science in Architecture,College Of Architecture,2023-2024,239,1,2023-2024,2,239,66,318,100.0,66,False
+BSBUSINESS,Bachelor of Science in Business Administration,College Of Management And Business Technology,2023-2024,104,1,2023-2024,1,104,48,33,100.0,48,False
+BSBUSINESS,Bachelor of Science in Business Administration,College Of Management And Business Technology,2023-2024,104,2,2023-2024,2,398,160,174,382.69,208,False
+BSBUSINESS,Bachelor of Science in Business Administration,College Of Management And Business Technology,2023-2024,398,1,2023-2024,2,398,160,174,100.0,160,False
+BSCIVILENG,Bachelor of Science in Civil Engineering,College Of Engineering,2023-2024,127,1,2023-2024,1,127,95,430,100.0,95,False
+BSCIVILENG,Bachelor of Science in Civil Engineering,College Of Engineering,2023-2024,127,2,2023-2024,2,76,22,25,59.84,117,False
+BSCIVILENG,Bachelor of Science in Civil Engineering,College Of Engineering,2023-2024,76,1,2023-2024,2,76,22,25,100.0,22,False
+BSCRIMINOL,Bachelor of Science in Criminology,College Of Criminology,2023-2024,66,1,2023-2024,1,66,99,225,100.0,99,False
+BSCRIMINOL,Bachelor of Science in Criminology,College Of Criminology,2023-2024,66,2,2023-2024,2,310,74,206,469.7,173,False
+BSCRIMINOL,Bachelor of Science in Criminology,College Of Criminology,2023-2024,310,1,2023-2024,2,310,74,206,100.0,74,False
+BSEARLYCHI,Bachelor of Early Childhood Education (BECEd),College Of Education,2023-2024,419,1,2023-2024,1,419,49,244,100.0,49,False
+BSEARLYCHI,Bachelor of Early Childhood Education (BECEd),College Of Education,2023-2024,419,2,2023-2024,2,290,88,284,69.21,137,False
+BSEARLYCHI,Bachelor of Early Childhood Education (BECEd),College Of Education,2023-2024,290,1,2023-2024,2,290,88,284,100.0,88,False
+BSELECTRIC,Bachelor of Science in Electrical Engineering,College Of Engineering,2023-2024,305,1,2023-2024,1,305,119,281,100.0,119,False
+BSELECTRIC,Bachelor of Science in Electrical Engineering,College Of Engineering,2023-2024,305,2,2023-2024,2,356,156,234,116.72,275,False
+BSELECTRIC,Bachelor of Science in Electrical Engineering,College Of Engineering,2023-2024,356,1,2023-2024,2,356,156,234,100.0,156,False
+BSELEMENTA,Bachelor of Elementary Education (BEEd),College Of Education,2023-2024,243,1,2023-2024,1,243,99,312,100.0,99,False
+BSELEMENTA,Bachelor of Elementary Education (BEEd),College Of Education,2023-2024,243,2,2023-2024,2,228,38,130,93.83,137,False
+BSELEMENTA,Bachelor of Elementary Education (BEEd),College Of Education,2023-2024,228,1,2023-2024,2,228,38,130,100.0,38,False
+BSENTREPRE,Bachelor of Science in Entrepreneurship,College Of Management And Business Technology,2023-2024,247,1,2023-2024,1,247,18,170,100.0,18,False
+BSENTREPRE,Bachelor of Science in Entrepreneurship,College Of Management And Business Technology,2023-2024,247,2,2023-2024,2,513,71,60,207.69,89,False
+BSENTREPRE,Bachelor of Science in Entrepreneurship,College Of Management And Business Technology,2023-2024,513,1,2023-2024,2,513,71,60,100.0,71,False
+BSHOSPITAL,Bachelor of Science in Hospitality Management,College Of Management And Business Technology,2023-2024,109,1,2023-2024,1,109,94,424,100.0,94,True
+BSHOSPITAL,Bachelor of Science in Hospitality Management,College Of Management And Business Technology,2023-2024,109,2,2023-2024,2,50,43,243,45.87,137,True
+BSHOSPITAL,Bachelor of Science in Hospitality Management,College Of Management And Business Technology,2023-2024,50,1,2023-2024,2,50,43,243,100.0,43,False
+BSHOTELAND,Bachelor of Science in Hotel and Restaurant Management,College Of Management And Business Technology,2023-2024,197,1,2023-2024,1,197,55,186,100.0,55,False
+BSHOTELAND,Bachelor of Science in Hotel and Restaurant Management,College Of Management And Business Technology,2023-2024,197,2,2023-2024,2,298,69,486,151.27,124,False
+BSHOTELAND,Bachelor of Science in Hotel and Restaurant Management,College Of Management And Business Technology,2023-2024,298,1,2023-2024,2,298,69,486,100.0,69,False
+BSINDUSTRI,Bachelor of Science in Industrial Education (BSIEd),College Of Education,2023-2024,477,1,2023-2024,1,477,95,448,100.0,95,True
+BSINDUSTRI,Bachelor of Science in Industrial Education (BSIEd),College Of Education,2023-2024,477,2,2023-2024,2,170,91,134,35.64,186,True
+BSINDUSTRI,Bachelor of Science in Industrial Education (BSIEd),College Of Education,2023-2024,170,1,2023-2024,2,170,91,134,100.0,91,False
+BSINFORMAT,Bachelor of Science in Information Technology,College Of Information And Communication Technology,2023-2024,145,1,2023-2024,1,145,68,229,100.0,68,False
+BSINFORMAT,Bachelor of Science in Information Technology,College Of Information And Communication Technology,2023-2024,145,2,2023-2024,2,240,36,282,165.52,104,False
+BSINFORMAT,Bachelor of Science in Information Technology,College Of Information And Communication Technology,2023-2024,240,1,2023-2024,2,240,36,282,100.0,36,False
+BSMECHANIC,Bachelor of Science in Mechanical Engineering,College Of Engineering,2023-2024,129,1,2023-2024,1,129,81,192,100.0,81,False
+BSMECHANIC,Bachelor of Science in Mechanical Engineering,College Of Engineering,2023-2024,129,2,2023-2024,2,151,97,205,117.05,178,False
+BSMECHANIC,Bachelor of Science in Mechanical Engineering,College Of Engineering,2023-2024,151,1,2023-2024,2,151,97,205,100.0,97,False
+BSPHYSICAL,Bachelor of Physical Education (BPEd),College Of Education,2023-2024,49,1,2023-2024,1,49,48,175,100.0,48,False
+BSPHYSICAL,Bachelor of Physical Education (BPEd),College Of Education,2023-2024,49,2,2023-2024,2,58,88,38,118.37,136,False
+BSPHYSICAL,Bachelor of Physical Education (BPEd),College Of Education,2023-2024,58,1,2023-2024,2,58,88,38,100.0,88,False
+BSPUBLICAD,Bachelor of Public Administration Major in Disaster Management,College Of Public Administration And Disaster Management,2023-2024,150,1,2023-2024,1,150,66,335,100.0,66,False
+BSPUBLICAD,Bachelor of Public Administration Major in Disaster Management,College Of Public Administration And Disaster Management,2023-2024,150,2,2023-2024,2,387,125,559,258.0,191,False
+BSPUBLICAD,Bachelor of Public Administration Major in Disaster Management,College Of Public Administration And Disaster Management,2023-2024,387,1,2023-2024,2,387,125,559,100.0,125,False
+BSSECONDAR,Bachelor of Secondary Education (BSEd),College Of Education,2023-2024,195,1,2023-2024,1,195,12,149,100.0,12,False
+BSSECONDAR,Bachelor of Secondary Education (BSEd),College Of Education,2023-2024,195,2,2023-2024,2,247,118,332,126.67,130,False
+BSSECONDAR,Bachelor of Secondary Education (BSEd),College Of Education,2023-2024,247,1,2023-2024,2,247,118,332,100.0,118,False
+BSSPECIALN,Bachelor of Special Needs Education (BSNEd),College Of Education,2023-2024,159,1,2023-2024,1,159,93,469,100.0,93,False
+BSSPECIALN,Bachelor of Special Needs Education (BSNEd),College Of Education,2023-2024,159,2,2023-2024,2,227,3,244,142.77,96,False
+BSSPECIALN,Bachelor of Special Needs Education (BSNEd),College Of Education,2023-2024,227,1,2023-2024,2,227,3,244,100.0,3,False
+BSTECHNOLO,Bachelor of Technology and Livelihood Education (BTLEd),College Of Education,2023-2024,126,1,2023-2024,1,126,87,402,100.0,87,False
+BSTECHNOLO,Bachelor of Technology and Livelihood Education (BTLEd),College Of Education,2023-2024,126,2,2023-2024,2,166,64,318,131.75,151,False
+BSTECHNOLO,Bachelor of Technology and Livelihood Education (BTLEd),College Of Education,2023-2024,166,1,2023-2024,2,166,64,318,100.0,64,False
+BSTOURISMM,Bachelor of Science in Tourism Management,College Of Management And Business Technology,2023-2024,60,1,2023-2024,1,60,40,147,100.0,40,False
+BSTOURISMM,Bachelor of Science in Tourism Management,College Of Management And Business Technology,2023-2024,60,2,2023-2024,2,363,5,24,605.0,45,False
+BSTOURISMM,Bachelor of Science in Tourism Management,College Of Management And Business Technology,2023-2024,363,1,2023-2024,2,363,5,24,100.0,5,False

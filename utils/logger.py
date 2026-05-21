@@ -1,135 +1,274 @@
 # ==============================================================================
 # NEUST Academic Analytics and Forecasting System
 # utils/logger.py
-# Loguru-based logger with console + rotating file output
+# Clean Human-Friendly Logger for Data Pipelines
 # ==============================================================================
 
 import sys
 from pathlib import Path
-
 from loguru import logger as _logger
 
 # ------------------------------------------------------------------------------
-# Import config — but guard against circular imports during early startup
+# Load Config
 # ------------------------------------------------------------------------------
 try:
     from utils.config import get_config
+
     _config = get_config()
     _logs_path: Path = _config.logs_path
     _debug: bool = _config.debug
+
 except Exception:
-    # Fallback if config is not yet available (e.g. during testing)
     _logs_path = Path("logs")
     _debug = False
 
 # ------------------------------------------------------------------------------
-# Ensure logs directory exists
+# Create Logs Directory
 # ------------------------------------------------------------------------------
 _logs_path.mkdir(parents=True, exist_ok=True)
 
 # ------------------------------------------------------------------------------
-# Log format
+# Remove Default Logger
 # ------------------------------------------------------------------------------
+_logger.remove()
+
+# ==============================================================================
+# CLEAN CONSOLE FORMAT
+# ==============================================================================
+
 _CONSOLE_FORMAT = (
-    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-    "<level>{level: <8}</level> | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+    "<green>{time:HH:mm:ss}</green> | "
+    "<level>{level: <7}</level> | "
     "<level>{message}</level>"
 )
 
+# ==============================================================================
+# DETAILED FILE FORMAT
+# ==============================================================================
+
 _FILE_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-    "{level: <8} | "
+    "{level:<8} | "
     "{name}:{function}:{line} | "
     "{message}"
 )
 
-# ------------------------------------------------------------------------------
-# Configure logger
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# CONSOLE LOGGER
+# ==============================================================================
 
-# Remove the default loguru handler
-_logger.remove()
-
-# ── Console handler ──────────────────────────────────────────────────────────
 _logger.add(
     sys.stdout,
     format=_CONSOLE_FORMAT,
     level="DEBUG" if _debug else "INFO",
     colorize=True,
-    backtrace=True,
-    diagnose=_debug,    # show variable values in tracebacks only in debug mode
+    backtrace=False,
+    diagnose=False,
 )
 
-# ── Daily rotating file handler (one file per day) ───────────────────────────
+# ==============================================================================
+# MAIN PIPELINE LOG FILE
+# ==============================================================================
+
 _logger.add(
     str(_logs_path / "pipeline_{time:YYYYMMDD}.log"),
     format=_FILE_FORMAT,
-    level="DEBUG",          # always capture DEBUG to file for full audit trail
-    rotation="00:00",       # new file at midnight
-    retention="30 days",    # keep 30 days of logs
-    compression="zip",      # compress old logs to save disk space
-    backtrace=True,
-    diagnose=False,         # never write variable values to file (may contain PII)
-    encoding="utf-8",
-    enqueue=True,           # non-blocking writes — pipeline speed unaffected
-)
-
-# ── Error-only file handler (quick reference for failures) ───────────────────
-_logger.add(
-    str(_logs_path / "errors_{time:YYYYMMDD}.log"),
-    format=_FILE_FORMAT,
-    level="ERROR",
-    rotation="00:00",
-    retention="60 days",    # keep errors longer than regular logs
+    level="DEBUG",
+    rotation="1 day",
+    retention="30 days",
     compression="zip",
-    backtrace=True,
-    diagnose=False,
     encoding="utf-8",
     enqueue=True,
 )
 
-# ------------------------------------------------------------------------------
-# Public logger instance
-# All modules import this:
-#   from utils.logger import logger
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# ERROR LOG FILE
+# ==============================================================================
+
+_logger.add(
+    str(_logs_path / "errors_{time:YYYYMMDD}.log"),
+    format=_FILE_FORMAT,
+    level="ERROR",
+    rotation="1 day",
+    retention="60 days",
+    compression="zip",
+    encoding="utf-8",
+    enqueue=True,
+)
+
+# ==============================================================================
+# PUBLIC LOGGER
+# ==============================================================================
+
 logger = _logger
 
+# ==============================================================================
+# PIPELINE UI HELPERS
+# ==============================================================================
+
+def _format(prefix: str, message: str) -> str:
+    return f"[{prefix}] {message}"
+
+
+def _print_table(prefix: str, rows: list[tuple[str, str]]) -> None:
+    for label, value in rows:
+        logger.info(_format(prefix, f"{label:<22}: {value}"))
+
+
+def line(char: str = "─", width: int = 70) -> None:
+    logger.info(char * width)
+
+
+def big_line(width: int = 70) -> None:
+    logger.info("═" * width)
+
+
 # ------------------------------------------------------------------------------
-# Pipeline step helpers
-# Used by pipeline.py to print clean step banners in the console
+# PIPELINE START / END
 # ------------------------------------------------------------------------------
-
-def log_step_start(step: int, name: str) -> None:
-    """Log a clean banner when a pipeline step begins."""
-    logger.info("=" * 60)
-    logger.info("  STEP {}  |  {}", step, name.upper())
-    logger.info("=" * 60)
-
-
-def log_step_success(step: int, name: str, rows: int | None = None) -> None:
-    """Log a success banner when a pipeline step completes."""
-    suffix = f" — {rows:,} rows processed" if rows is not None else ""
-    logger.success("  STEP {} COMPLETE  |  {}{}", step, name.upper(), suffix)
-
-
-def log_step_failure(step: int, name: str, error: Exception) -> None:
-    """Log a failure banner when a pipeline step raises an exception."""
-    logger.error("  STEP {} FAILED  |  {}  |  {}", step, name.upper(), error)
-
 
 def log_pipeline_start(label: str) -> None:
-    """Log the pipeline start banner."""
-    logger.info("*" * 60)
-    logger.info("  NEUST ANALYTICS PIPELINE STARTED")
-    logger.info("  Label : {}", label)
-    logger.info("*" * 60)
+    big_line()
+    logger.info(_format("PIPELINE", "🚀 PIPELINE STARTED"))
+    logger.info(_format("PIPELINE", f"Job: {label}"))
+    big_line()
 
 
 def log_pipeline_end(label: str, status: str, elapsed_seconds: float) -> None:
-    """Log the pipeline completion banner."""
-    logger.info("*" * 60)
-    logger.info("  PIPELINE {} — {}", status.upper(), label)
-    logger.info("  Elapsed : {:.2f}s", elapsed_seconds)
-    logger.info("*" * 60)
+    big_line()
+
+    if status.lower() == "success":
+        logger.success(_format("PIPELINE", f"✅ PIPELINE SUCCESS: {label}"))
+    else:
+        logger.error(_format("PIPELINE", f"❌ PIPELINE FAILED: {label}"))
+
+    logger.info(_format("PIPELINE", f"Runtime: {elapsed_seconds:.2f} seconds"))
+    big_line()
+
+
+# ------------------------------------------------------------------------------
+# STEP LOGGING
+# ------------------------------------------------------------------------------
+
+def log_stage_start(stage: str, step: int, name: str) -> None:
+    line()
+    logger.info(_format(stage, f"🔄 START STEP {step} — {name}"))
+    line()
+
+
+def log_stage_success(stage: str, step: int, name: str, rows: int | None = None) -> None:
+    if rows is not None:
+        logger.success(_format(stage, f"✅ COMPLETE STEP {step} — {name} | {rows:,} rows processed"))
+    else:
+        logger.success(_format(stage, f"✅ COMPLETE STEP {step} — {name}"))
+
+
+def log_stage_failure(stage: str, step: int, name: str, error: Exception) -> None:
+    logger.error(_format(stage, f"❌ FAILED STEP {step} — {name}"))
+    logger.error(_format("ERROR", f"{error}"))
+
+
+def log_step_start(step: int, name: str) -> None:
+    log_stage_start("PIPELINE", step, name)
+
+
+def log_step_success(step: int, name: str, rows: int | None = None) -> None:
+    log_stage_success("PIPELINE", step, name, rows)
+
+
+def log_step_failure(step: int, name: str, error: Exception) -> None:
+    log_stage_failure("PIPELINE", step, name, error)
+
+
+# ------------------------------------------------------------------------------
+# SUMMARY AND DASHBOARD HELPERS
+# ------------------------------------------------------------------------------
+
+def log_warning(message: str, stage: str = "WARNING") -> None:
+    logger.warning(_format(stage, message))
+
+
+def log_error(message: str, stage: str = "ERROR") -> None:
+    logger.error(_format(stage, message))
+
+
+def print_kpi_summary(
+    title: str,
+    period: str,
+    generated_at: str,
+    overview: list[tuple[str, str]],
+    rates: list[tuple[str, str]],
+    changes: list[tuple[str, str]],
+    top_programs: list[tuple[str, str]] | None = None,
+    at_risk_programs: list[tuple[str, str]] | None = None,
+) -> None:
+    big_line()
+    logger.success(_format("KPI", title))
+    logger.info(_format("KPI", f"Period       : {period}"))
+    logger.info(_format("KPI", f"Generated    : {generated_at}"))
+    big_line()
+    _print_table("KPI", overview)
+    line()
+    logger.info(_format("KPI", "Rates:"))
+    _print_table("KPI", rates)
+    line()
+    logger.info(_format("KPI", "Changes:"))
+    _print_table("KPI", changes)
+
+    if top_programs:
+        line()
+        logger.info(_format("KPI", "Top Programs by Enrollment:"))
+        for program_code, enrolled in top_programs:
+            logger.info(_format("KPI", f"{program_code:<10} — {enrolled}"))
+
+    if at_risk_programs:
+        line()
+        logger.info(_format("KPI", "At-Risk Programs (dropout ≥ 20%):"))
+        for program_code, detail in at_risk_programs:
+            logger.info(_format("KPI", f"{program_code:<10} — {detail}"))
+
+    big_line()
+
+
+def print_ml_summary(
+    title: str,
+    performance: list[tuple[str, str]],
+    risk_summary: list[tuple[str, str]],
+    feature_importances: list[tuple[str, str]] | None = None,
+) -> None:
+    big_line()
+    logger.success(_format("ML", title))
+    big_line()
+    logger.info(_format("ML", "Model Performance:"))
+    _print_table("ML", performance)
+    line()
+    logger.info(_format("ML", "Risk Summary:"))
+    _print_table("ML", risk_summary)
+
+    if feature_importances:
+        line()
+        logger.info(_format("ML", "Feature Importance:"))
+        for feature, importance in feature_importances:
+            logger.info(_format("ML", f"{feature:<25} {importance}"))
+
+    big_line()
+
+
+# ------------------------------------------------------------------------------
+# OPTIONAL SHORTCUT HELPERS
+# ------------------------------------------------------------------------------
+
+def info(message: str) -> None:
+    logger.info(f"ℹ️ {message}")
+
+
+def success(message: str) -> None:
+    logger.success(f"✅ {message}")
+
+
+def warning(message: str) -> None:
+    logger.warning(f"⚠️ {message}")
+
+
+def error(message: str) -> None:
+    logger.error(f"❌ {message}")

@@ -24,7 +24,7 @@ from database.models.gold_models import (
 )
 from transformation.rules_engine import KPIRules
 from utils.date_helpers import semester_to_label
-from utils.logger import log_step_failure, log_step_start, log_step_success, logger
+from utils.logger import log_stage_failure, log_stage_start, log_stage_success, logger
 
 
 # ==============================================================================
@@ -90,7 +90,7 @@ class GoldAggregator:
     def run(self) -> AggregationResult:
         """Execute the full Silver → Gold aggregation pipeline."""
         result = AggregationResult()
-        log_step_start(3, "Gold aggregation")
+        log_stage_start("GOLD", 3, "Gold aggregation")
 
         try:
             # Step 1 — sync dimensions
@@ -115,19 +115,17 @@ class GoldAggregator:
             result.status        = "failed"
             result.error_message = str(exc)
             logger.exception("Gold aggregation failed: {}", exc)
-            log_step_failure(3, "Gold aggregation", exc)
+            log_stage_failure("GOLD", 3, "Gold aggregation", exc)
 
         finally:
             result.elapsed_seconds = time.monotonic() - self._started
 
         if result.status == "success":
-            log_step_success(3, "Gold aggregation", rows=result.total_rows_written)
+            log_stage_success("GOLD", 3, "Gold aggregation", rows=result.total_rows_written)
             logger.info(
-                "Gold complete — fact={} | agg_program={} | agg_college={} | {:.2f}s",
-                result.fact_rows_written,
-                result.agg_program_rows_written,
-                result.agg_college_rows_written,
-                result.elapsed_seconds,
+                f"[GOLD] Gold complete — fact={result.fact_rows_written} | "
+                f"agg_program={result.agg_program_rows_written} | "
+                f"agg_college={result.agg_college_rows_written} | {result.elapsed_seconds:.2f}s"
             )
 
         return result

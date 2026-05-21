@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, ForeignKey, Integer,
+    BigInteger, Boolean, Column, Computed, ForeignKey, Integer,
     Numeric, SmallInteger, Text, TIMESTAMP,
     CheckConstraint, Index, UniqueConstraint,
 )
@@ -204,11 +204,17 @@ class SilverEnrollmentFlow(TransformMixin, Base):
     transferees         = Column(Integer, nullable=False, default=0)
     returnees           = Column(Integer, nullable=False, default=0)
 
-    # Computed rate (Python-side; the DB generated column handles persistence)
+    # Computed rate — derived by PostgreSQL from applicants and accepted_applicants
     acceptance_rate = Column(
         Numeric(5, 2),
+        Computed(
+            "CASE WHEN applicants > 0 "
+            "THEN ROUND((accepted_applicants::NUMERIC / applicants) * 100, 2) "
+            "ELSE NULL END",
+            persisted=True,
+        ),
         nullable=True,
-        comment="accepted_applicants / applicants * 100 — populated by transformation",
+        comment="accepted_applicants / applicants * 100 — computed by DB",
     )
 
     # Relationships
